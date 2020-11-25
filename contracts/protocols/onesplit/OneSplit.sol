@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: Apache-2.0
+pragma solidity >=0.6.12;
+
+interface OneSplit {
+    function swap(
+        address fromToken,
+        address destToken,
+        uint256 amount,
+        uint256 minReturn,
+        uint256[] calldata distribution,
+        uint256 flags
+    ) external payable returns (uint256 returnAmount);
+
+    function getExpectedReturn(
+        address fromToken,
+        address destToken,
+        uint256 amount,
+        uint256 parts,
+        uint256 flags // See constants in IOneSplit.sol
+    ) external view returns (uint256 returnAmount, uint256[] memory distribution);
+}
