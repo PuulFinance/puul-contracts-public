@@ -35,17 +35,17 @@ contract EarnPool is ERC20, ReentrancyGuard, PuulRewards, IPoolFarm {
   uint256 constant MIN_PRICE_PER_SHARE = 10;
 
   modifier onlyMember() {
-    require(isMember(msg.sender), '!member');
+    isMember(msg.sender);
     _;
   }
 
   modifier onlyWithdrawal() {
-    require((address(_fees) != address(0) && msg.sender == _fees.withdrawal() || hasRole(ROLE_ADMIN, msg.sender) || hasRole(ROLE_HARVESTER, msg.sender)), '!withdrawer');
+    require((address(_fees) != address(0) && msg.sender == _fees.withdrawal()), '!with');
     _;
   }
 
-  function isMember(address member) internal view returns(bool) {
-    return member != address(0) && (_allowAll == true || hasRole(ROLE_MEMBER, member));
+  function isMember(address member) internal view {
+    require(member != address(0) && (_allowAll == true || hasRole(ROLE_MEMBER, member)), '!mem');
   }
 
   constructor (string memory name, string memory symbol, bool allowAll, address fees) public ERC20(name, symbol) {
@@ -155,7 +155,6 @@ contract EarnPool is ERC20, ReentrancyGuard, PuulRewards, IPoolFarm {
     if (tokenSupply == 0) return; // Nothing to do
     uint256 pricePerShare = supply > 0 ? (tokenSupply * precision).div(supply) : 0;
     if (pricePerShare < MIN_PRICE_PER_SHARE) {
-      // Console.log('pricePerShare < min', pricePerShare);
       pricePerShare = 0;
     }
     _accSharePrices[token] = pricePerShare.add(_accSharePrices[token]);
@@ -164,18 +163,10 @@ contract EarnPool is ERC20, ReentrancyGuard, PuulRewards, IPoolFarm {
     } else {
       uint256 rounded = pricePerShare.mul(supply).div(precision);
       if (rounded < tokenSupply) {
-        // Console.log('rounded', tokenSupply - rounded);
         _rewardExtra[token] = _rewardExtra[token].add(tokenSupply - rounded);
       }
     }
   }
-
-  // function rewardExtras() onlyHarvester external view returns(uint256[] memory totals) {
-  //   totals = new uint256[](_rewards.length);
-  //   for (uint256 i = 0; i < _rewards.length; i++) {
-  //     totals[i] = _rewardExtra[_rewards[i]];
-  //   }
-  // }
 
   function owedRewards() external view returns(uint256[] memory rewards) {
     rewards = new uint256[](_rewards.length);
@@ -239,7 +230,11 @@ contract EarnPool is ERC20, ReentrancyGuard, PuulRewards, IPoolFarm {
       IERC20 token = _rewards[i];
       uint256 debtSharePrice = debt[token];
       uint256 currentSharePrice = _accSharePrices[token];
-      owed[token] += ((currentSharePrice - debtSharePrice) * amount).div(precision);
+      uint256 computedSharePrice = currentSharePrice - debtSharePrice;
+      if (computedSharePrice > 0) {
+        uint256 rewards = computedSharePrice.mul(amount).div(precision);
+        owed[token] = rewards.add(owed[token]);
+      }
       if (updateDebt) {
         debt[token] = currentSharePrice;
       }
@@ -255,11 +250,9 @@ contract EarnPool is ERC20, ReentrancyGuard, PuulRewards, IPoolFarm {
   }
 
   function _mint(address account, uint256 amount) internal override {
-    require(isMember(account), '!member');
+    isMember(account);
     uint256 balance = _balances[account];
     _updateRewards(account, balance, true);
-
-    _beforeTokenTransfer(address(0), account, amount);
 
     _totalSupply = _totalSupply.add(amount);
     _balances[account] = balance.add(amount);
@@ -267,29 +260,25 @@ contract EarnPool is ERC20, ReentrancyGuard, PuulRewards, IPoolFarm {
   }
 
   function _burn(address account, uint256 amount) internal override {
-    require(isMember(account), '!member');
+    isMember(account);
     _updateRewards(account, amount, false);
 
-    _beforeTokenTransfer(account, address(0), amount);
-
-    _balances[account] = _balances[account].sub(amount, "ERC20: burn amount exceeds balance");
+    _balances[account] = _balances[account].sub(amount, "burn amount");
     _totalSupply = _totalSupply.sub(amount);
     emit Transfer(account, address(0), amount);
   }
 
   function _burnWithFee(address account, uint256 amount) internal returns (uint256) {
-    require(isMember(account), '!member');
+    isMember(account);
     _updateRewards(account, amount, false);
 
-    _beforeTokenTransfer(account, address(0), amount);
-
     (uint256 newAmount, uint256 feeAmount, address withdrawal) = _splitWithdrawal(amount, account);
-    require(newAmount + feeAmount == amount, '_burnWithFee bad amount');
+    require(newAmount + feeAmount == amount, 'bad amount');
 
     if (withdrawal != address(0))
       _updateRewards(withdrawal, _balances[withdrawal], true);
 
-    _balances[account] = _balances[account].sub(amount, "ERC20: burn amount exceeds balance");
+    _balances[account] = _balances[account].sub(amount, "burn amount");
     if (withdrawal != address(0))
       _balances[withdrawal] = _balances[withdrawal].add(feeAmount);
     _totalSupply = _totalSupply.sub(newAmount);
@@ -302,14 +291,12 @@ contract EarnPool is ERC20, ReentrancyGuard, PuulRewards, IPoolFarm {
   }
 
   function _transfer(address sender, address recipient, uint256 amount) internal override {
-    require(isMember(sender), '!member');
-    require(isMember(recipient), '!member');
+    isMember(sender);
+    isMember(recipient);
     _updateRewards(sender, amount, false);
 
-    _beforeTokenTransfer(sender, recipient, amount);
-
     (uint256 newAmount, uint256 feeAmount, address withdrawal) = _splitWithdrawal(amount, sender);
-    require(newAmount + feeAmount == amount, 'transfer bad amount');
+    require(newAmount + feeAmount == amount, 'xfer amt');
     _updateRewards(recipient, _balances[recipient], true);
     
     if (withdrawal != address(0)) {
@@ -317,7 +304,7 @@ contract EarnPool is ERC20, ReentrancyGuard, PuulRewards, IPoolFarm {
       _balances[withdrawal] = _balances[withdrawal].add(feeAmount);
     }
     _balances[recipient] = _balances[recipient].add(newAmount);
-    _balances[sender] = _balances[sender].sub(amount, "ERC20: transfer amount exceeds balance");
+    _balances[sender] = _balances[sender].sub(amount, "xfer amt");
 
     emit Transfer(sender, recipient, newAmount);
     if (withdrawal != address(0))
