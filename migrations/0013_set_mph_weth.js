@@ -1,4 +1,7 @@
 const UniswapHelper = artifacts.require("UniswapHelper");
+const PuulRewardFeesEndpoint = artifacts.require("PuulRewardFeesEndpoint");
+const PuulWithdrawalFeesEndpoint = artifacts.require("PuulWithdrawalFeesEndpoint");
+const MPH_WETHPool = artifacts.require("MPH_WETHPool");
 
 module.exports = async function (deployer, network, accounts) {
   const addrs = require('./utils/accounts.js')(accounts, network);
@@ -23,7 +26,14 @@ module.exports = async function (deployer, network, accounts) {
       await helper.addPath('MPH/USDT', [token, weth, usdt]);
       await helper.addPath('USDT/MPH', [usdt, weth, token]);
       await helper.addPath('DAI/MPH', [dai, weth, token]);
-      await helper.addPath('MPH/DAI', [token, weth, dai]);    
+      await helper.addPath('MPH/DAI', [token, weth, dai]);
+
+      const pool = await MPH_WETHPool.deployed();
+      const puulRewardFeesEndpoint = await PuulRewardFeesEndpoint.deployed();
+      const puulWithdrawalFeesEndpoint = await PuulWithdrawalFeesEndpoint.deployed();
+      puulRewardFeesEndpoint.addPool(pool.address);
+      puulWithdrawalFeesEndpoint.addPool(pool.address);
+      
     }
   });
 };

@@ -4,8 +4,6 @@ const UniswapPoolHelper = artifacts.require("UniswapPoolHelper");
 const UniswapHelper = artifacts.require("UniswapHelper");
 const PuulFees = artifacts.require("PuulFees");
 const Timelock12Hours = artifacts.require("Timelock12Hours");
-const PuulRewardFeesEndpoint = artifacts.require("PuulRewardFeesEndpoint");
-const PuulWithdrawalFeesEndpoint = artifacts.require("PuulWithdrawalFeesEndpoint");
 const Limits = artifacts.require("Limits");
 
 module.exports = async function (deployer, network, accounts) {
@@ -30,11 +28,6 @@ module.exports = async function (deployer, network, accounts) {
     await pool.setHelper(uhelper.address);
     await pool.setLimits(limits.address);
 
-    const puulRewardFeesEndpoint = await PuulRewardFeesEndpoint.deployed();
-    const puulWithdrawalFeesEndpoint = await PuulWithdrawalFeesEndpoint.deployed();
-    puulRewardFeesEndpoint.addPool(pool.address);
-    puulWithdrawalFeesEndpoint.addPool(pool.address);
-  
     const farm = await deployer.deploy(deployFarm, pool.address, [token], puulFees.address);
     console.log(`USDC_BONDFarm: '${farm.address}',`);
     await pool.setFarm(farm.address);

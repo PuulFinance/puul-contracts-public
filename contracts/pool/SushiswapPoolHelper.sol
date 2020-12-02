@@ -9,7 +9,7 @@ import '../protocols/uniswap-v2/interfaces/IUniswapV2Pair.sol';
 import '../protocols/uniswap-v2/interfaces/IUniswapV2Router02.sol';
 import '../utils/Console.sol';
 import "../token/ERC20/ERC20.sol";
-import "../protocols/uniswap-v2/UniswapHelper.sol";
+import "../protocols/sushiswap/SushiswapHelper.sol";
 
 struct UniswapPoolHelperState {
   IUniswapV2Pair pair;
@@ -32,7 +32,7 @@ struct UniswapPoolHelperState {
   address to;
 }
 
-library UniswapPoolHelper {
+library SushiswapPoolHelper {
   using Address for address;
   using SafeMath for uint256;
   using SafeERC20 for IERC20;
@@ -40,7 +40,7 @@ library UniswapPoolHelper {
   // TODO adjust MIN_AMOUNT
   uint256 public constant MIN_AMOUNT = 5;
 
-  IUniswapV2Router02 public constant UNI_ROUTER = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
+  IUniswapV2Router02 public constant UNI_ROUTER = IUniswapV2Router02(0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F);
 
   address constant public USDC = address(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
   address constant public DAI = address(0x6B175474E89094C44Da98b954EedeAC495271d0F);
@@ -105,7 +105,7 @@ library UniswapPoolHelper {
     require(amount0 > MIN_AMOUNT, '!amount0');
     require(amount1 > MIN_AMOUNT, '!amount1');
 
-    UniswapPoolHelperState memory state = UniswapPoolHelper.allocateState(amount0, amount1, pair, min0, min1);
+    UniswapPoolHelperState memory state = allocateState(amount0, amount1, pair, min0, min1);
 
     state.amount0 = safeTransferDeflationary(IERC20(state.token0), state.amount0, state);
     state.amount1 = safeTransferDeflationary(IERC20(state.token1), state.amount1, state);
@@ -121,7 +121,7 @@ library UniswapPoolHelper {
 
   function depositLPToken(IUniswapV2Pair pair, uint256 amount) external returns (uint256) {
     require(amount > MIN_AMOUNT, '!amount');
-    UniswapPoolHelperState memory state = UniswapPoolHelper.allocateState(pair, 0, 0);
+    UniswapPoolHelperState memory state = allocateState(pair, 0, 0);
     return safeTransferDeflationary(IERC20(address(pair)), amount, state);
   }
 
@@ -148,7 +148,7 @@ library UniswapPoolHelper {
   }
 
   function claimToToken(
-    UniswapHelper helper, 
+    SushiswapHelper helper, 
     address to, 
     uint[] memory amounts,
     uint[] memory min, 
@@ -209,8 +209,8 @@ library UniswapPoolHelper {
   }
 
   function depositSingleSided(address help, address token, uint256 amountA, uint256 amountB, IUniswapV2Pair pair, uint256 minSwapB, uint256 slippageA, uint256 slippageB, uint256 slippageRemA, uint256 slippageRemB) external returns (uint256) {
-    UniswapHelper helper = UniswapHelper(help);
-    UniswapPoolHelperState memory state = UniswapPoolHelper.allocateState(pair, 0, 0);
+    SushiswapHelper helper = SushiswapHelper(help);
+    UniswapPoolHelperState memory state = allocateState(pair, 0, 0);
     require(token == state.token0 || token == state.token1, 'invalid token');
 
     // Transfer tokens here
@@ -259,8 +259,8 @@ library UniswapPoolHelper {
   }
 
   function depositFromToken(address help, address token, uint256 amountA, uint256 amountB, IUniswapV2Pair pair, uint256 minSwapA, uint256 minSwapB, uint256 slippageA, uint256 slippageB, uint256 slippageRemA, uint256 slippageRemB) external returns (uint256) {
-    UniswapHelper helper = UniswapHelper(help);
-    UniswapPoolHelperState memory state = UniswapPoolHelper.allocateState(pair, 0, 0);
+    SushiswapHelper helper = SushiswapHelper(help);
+    UniswapPoolHelperState memory state = allocateState(pair, 0, 0);
     require(token != state.token0 && token != state.token1, 'use depositSingleSided');
     require(helper.pathExists(token, state.token0), 'bad token');
     require(helper.pathExists(token, state.token1), 'bad token');
