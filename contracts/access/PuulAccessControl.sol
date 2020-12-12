@@ -83,7 +83,7 @@ contract PuulAccessControl is AccessControl {
 
   function extractStuckTokens(address token, address to) onlyExtract external {
     require(token != address(0) && to != address(0));
-    // require(!_tokenInUse(token)); // TODO add back after beta
+    require(!_tokenInUse(token));
     uint256 balance = IERC20(token).balanceOf(address(this));
     if (balance > 0)
       IERC20(token).safeTransfer(to, balance);

@@ -11,7 +11,7 @@ library Path {
 }
 
 library Console {
-  bool constant PROD = true;
+  bool constant PROD = false;
 
   function concat(string memory a, string memory b) internal pure returns(string memory)
   {

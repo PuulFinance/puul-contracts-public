@@ -21,7 +21,8 @@
     "@truffle/hdwallet-provider": "^1.2.0",
     "dotenv": "^8.2.0",
     "eth-gas-reporter": "^0.2.19",
-    "ethagen": "^0.1.2"
+    "ethagen": "^0.1.2",
+    "truffle-plugin-verify": "^0.5.2"
   },
   "scripts": {
     "test": "export NODE_ENV=test && mocha"

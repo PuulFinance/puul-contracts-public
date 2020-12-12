@@ -35,9 +35,12 @@ module.exports = {
     mainnet: {
       provider: () => new HDWalletProvider(process.env.MAINNET_MNEMONIC, "http://127.0.0.1:8545"),
       network_id: 1,       
-      gasPrice: 28000000000, // gwei
+      gasPrice: 20000000000, // gwei
       gas: 6000000,
     }
   },
-  plugins: ["truffle-contract-size"]
+  plugins: ["truffle-contract-size","truffle-plugin-verify"],
+  api_keys: {
+    etherscan: 'M3CK9I76UKJXFYAZ93I3ZZWAG55RX4Z2BT'
+  }
 };
