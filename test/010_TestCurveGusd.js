@@ -2,11 +2,12 @@ const IWETH = artifacts.require("IWETH");
 const IERC20 = artifacts.require("IERC20");
 const IUniswapV2Pair = artifacts.require("IUniswapV2Pair");
 const UniswapHelper = artifacts.require("UniswapHelper");
+const CurveHelper = artifacts.require("CurveHelper");
 const IUniswapV2Router02 = artifacts.require("IUniswapV2Router02");
 const IUniswapV2Factory = artifacts.require("IUniswapV2Factory");
 const PuulFees = artifacts.require("PuulFees");
-const PICKLE_WETHPool = artifacts.require("PICKLE_WETHPool");
-const PICKLE_WETHStakingFarm = artifacts.require("PICKLE_WETHStakingFarm");
+const CurveGusd = artifacts.require("CurveGusd");
+const CurveGusdFarm = artifacts.require("CurveGusdFarm");
 const PuulRewardFeesEndpoint = artifacts.require("PuulRewardFeesEndpoint");
 const PuulRewardsFeeToken = artifacts.require("PuulRewardsFeeToken");
 const PuulWithdrawalFeesEndpoint = artifacts.require("PuulWithdrawalFeesEndpoint");
@@ -15,30 +16,33 @@ const PuulStakingPool = artifacts.require("PuulStakingPool");
 const PuulToken = artifacts.require("PuulToken");
 const PuulStakingPoolEndpoint = artifacts.require("PuulStakingPoolEndpoint");
 const Limits = artifacts.require("Limits");
-const Timelock12Hours = artifacts.require("Timelock12Hours");
+const RewardDistributor = artifacts.require("RewardDistributor");
 
 const BN = require('bn.js');
-const { assert } = require('chai');
 
-contract("PICKLE_WETHStakingFarm", async accounts => {
+contract("Curve3Gusd", async accounts => {
   let instance;
   let helper;
   let factory = '0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f';
   let weth = '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2';
-  let pair = '0xdc98556ce24f007a5ef6dc1ce96322d65832a819'; // ETH/PICKLE
   let usdc = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
   let dai = '0x6B175474E89094C44Da98b954EedeAC495271d0F';
   let usdt = '0xdAC17F958D2ee523a2206206994597C13D831ec7';
-  let pickle = '0x429881672B9AE42b8EbA0E26cD9C73711b891Ca5';
+  let lp = '0xD2967f45c4f384DEEa880F807Be904762a3DeA07';
+  let crv = '0xD533a949740bb3306d119CC777fa900bA034cd52';
+  let usdn = '0x674C6Ad92Fd080e4004b2312b45f796a192D27a0';
+  let gusd = '0x056Fd409E1d7A124BD7017459dFEa2F387b6d5Cd';
   const BASE_FEE = new BN('10000');
 
 
   let WETH;
-  let PAIR;
   let USDC;
   let USDT;
+  let USDN;
+  let GUSD;
   let DAI;
-  let PICKLE;
+  let LP;
+  let CRV;
   let puulFees;
   let IERC20WETH;
   let UNI_ROUTER;
@@ -47,6 +51,7 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
   const admin = accounts[0];
   const member1 = accounts[1];
   const member2 = accounts[2];
+  const harvester = accounts[0];
   const developer = admin;
   console.log('admin', admin);
   console.log('member1', member1);
@@ -59,9 +64,6 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
 
   const oneDay = 86400;
   const oneWeek = oneDay * 7;
-  const TIME_12H = 60 * 60 * 12;
-  const TIME_1H = 60 * 60
-  const TIME_1D = TIME_1H * 24
 
   const mineBlock = function () {
     return new Promise((resolve, reject) => {
@@ -102,6 +104,12 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
     return bal;
   }
 
+  const logGUSDBalance = async (msg, to) => {
+    const bal = await GUSD.balanceOf(to); 
+    console.log(msg, Number(bal.toString()).toFixed(2))
+    return bal;
+  }
+
   const logUSDTBalance = async (msg, to) => {
     const bal = await USDT.balanceOf(to); 
     logPicoether(msg, bal);
@@ -120,10 +128,6 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
     return bal;
   }
 
-  function encodeParameters(types, values) {
-    return web3.eth.abi.encodeParameters(types, values);
-  }
-
   const slippage = (amount, slippage) => amount.sub(amount.mul(slippage).div(new BN('10000')));
 
   const getLiquidityValue = (liquidity, reserve, supply) => liquidity.mul(reserve).div(supply);
@@ -135,6 +139,7 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
   const timeTravel = function (time) {
     return new Promise((resolve, reject) => {
       const id = new Date().getTime()
+      console.log('evm_increaseTime bef', id, time);
       web3.currentProvider.send({
         jsonrpc: "2.0",
         method: "evm_increaseTime",
@@ -142,65 +147,69 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
         id
       }, (err, result) => {
         if(err){ return reject(err) }
-        console.log('evm_increaseTime', result);
+        const id = new Date().getTime() + result;
+        console.log('evm_increaseTime aft', id);
         // resolve(result);
         web3.currentProvider.send({
           jsonrpc: '2.0',
           method: 'evm_mine',
-          id: result + 1,
+          id,
         }, (err2, res) => (err2 ? reject(err2) : resolve(result)));
       });
     })
   }
 
-  let token0;
-  let token1;
   let limits;
-  let timelock12;
+  let farm;
   let puulToken;
-  const slpSwap = new BN('200'); // 2% slippage
-  const slpA = new BN('200'); // 2% slippage
-  const slpB = new BN('200'); // 2% slippage
-  const slpRemA = new BN('200'); // 2% slippage
-  const slpRemB = new BN('200'); // 2% slippage
-  
+  let distributor;
   let withdrawalFeesEndpoint;
   let rewardFeesEndpoint;
   let withdrawalFeesToken;
   let rewardFeesToken;
   let dep = toPicoEther('2000')
-  let outs;
-  let tok0Min;
-  let tok1Min;
-  let respickle;
+
+  const approve = async (token, to, from, amt = web3.utils.toWei('100000')) => {
+    const allowance = await token.allowance(from, to);
+    if (allowance.isZero())
+      await token.approve(to, amt, {from});
+
+  }
 
   let initialized = false;
   async function initialize() {
     if (initialized) return;
     initialized = true;
-    PAIR = await IUniswapV2Pair.at(pair);
     helper = await UniswapHelper.deployed();
     puulFees = await PuulFees.deployed();
     withdrawFee = await puulFees.getWithdrawalFee();  
-    instance = await PICKLE_WETHPool.deployed();
+    instance = await CurveGusd.deployed();
+    farm = await CurveGusdFarm.deployed();
     limits = await Limits.deployed();
+    distributor = await RewardDistributor.deployed();
+    puulToken = await PuulToken.deployed();
+    await logEtherBalance('puul token balance before', puulToken, developer);
 
     WETH = await IWETH.at(weth);
     IERC20WETH = await IERC20.at(weth);
     USDC = await IERC20.at(usdc);
     USDT = await IERC20.at(usdt);
+    USDN = await IERC20.at(usdn);
+    GUSD = await IERC20.at(gusd);
     DAI = await IERC20.at(dai);
-    PICKLE = await IERC20.at(pickle);
-    token0 = await PAIR.token0();
-    token1 = await PAIR.token1();
-    console.log('token0', token0);
-    console.log('token1', token1);
+    LP = await IERC20.at(lp);
+    CRV = await IERC20.at(crv);
     UNI_FACTORY = await IUniswapV2Factory.at(factory);
-    await IERC20WETH.approve(instance.address, web3.utils.toWei('100000'), {from: member1});
+    await approve(GUSD, instance.address, member1);
+    await approve(USDN, instance.address, member1);
+    await approve(LP, instance.address, member1);
+    await approve(IERC20WETH, instance.address, member1);
+    await approve(IERC20WETH, instance.address, admin);
     UNI_ROUTER = await IUniswapV2Router02.at('0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D');
-    await IERC20WETH.approve(UNI_ROUTER.address, web3.utils.toWei('100000'), {from: member1});
-    await IERC20WETH.approve(UNI_ROUTER.address, web3.utils.toWei('100000'), {from: admin});
-    await USDT.approve(instance.address, toPicoEther('10000000000'), {from: member1});
+    await approve(IERC20WETH, UNI_ROUTER.address, member1);
+    await approve(IERC20WETH, UNI_ROUTER.address, admin);
+    await approve(USDT, instance.address, member1, toPicoEther('10000000000'));
+    await approve(USDT, instance.address, admin, toPicoEther('10000000000'));
     let balance = await IERC20WETH.balanceOf(member1);
     console.log('balance', balance);
     const amount = web3.utils.toWei('40');
@@ -215,8 +224,6 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
     // The fee tokens
     withdrawalFeesToken = await PuulWithdrawalFeeToken.deployed();
     rewardFeesToken = await PuulRewardsFeeToken.deployed();
-    timelock12 = await Timelock12Hours.deployed();
-    puulToken = await PuulToken.deployed();
 
   }
 
@@ -225,212 +232,126 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
 
   });
 
-  it("fund pickle/weth Uniswap pool with single sided weth, then usdt", async () => {
-    // The endpoints for the fees. These are farms that feed the rewards to the fee tokens
+  it("fund CurveGusd with USDT", async () => {
 
     console.log(`
       Convert some WETH to USDT
     `);
-    const amt = web3.utils.toWei('30');
-    logEther('swapping', amt);
-    const weus = await UNI_FACTORY.getPair(weth, usdt);
-    const wpair = await IUniswapV2Pair.at(weus);
-    const res = await wpair.getReserves();
-    console.log('reserves', etherFromWei(res[0]), picoetherFromWei(res[1]));
-    await logUSDTBalance('usdt balance before', member1);
-    await UNI_ROUTER.swapExactTokensForTokens(amt, 0, [weth, usdc], admin, Date.now() + 1800, {from: admin});
-    await UNI_ROUTER.swapExactTokensForTokens(amt, 0, [weth, usdt], member1, Date.now() + 1800, {from: member1});
-    const startingUSDT = await USDT.balanceOf(member1);
-    logPicoether('usdt balance before', startingUSDT);
+    try {
+      const amt = web3.utils.toWei('10');
+      logEther('swapping', amt);
+      const weus = await UNI_FACTORY.getPair(weth, usdt);
+      const wpair = await IUniswapV2Pair.at(weus);
+      const res = await wpair.getReserves();
+      console.log('reserves', etherFromWei(res[0]), picoetherFromWei(res[1]));
+      await logUSDTBalance('usdt balance before', member1);
+      await logEtherBalance('member1 WETH balance', IERC20WETH, member1);
+      await UNI_ROUTER.swapExactTokensForTokens(amt, 0, [weth, usdt], member1, Date.now() + 1800, {from: member1});
+      const startingUSDT = await USDT.balanceOf(member1);
+      logPicoether('usdt balance before', startingUSDT);
+      await UNI_ROUTER.swapExactTokensForTokens(amt, 0, [weth, usdt], admin, Date.now() + 1800);
+    } catch (e) {
+      console.log('weth to usdt failed', e)
+    }
 
     console.log(`
-      Deposit into the PICKLE/WETH pool using USDT.
+      Add some PUUL tokens to the Reward Distributor
     `);
-    await limits.setMaxDeposit(instance.address, toWei('0')); // reset max deposit
-    dep = toPicoEther('2000')
-    console.log('usdt depositing', picoetherFromWei(dep));
-    respickle = await PAIR.getReserves();
-    console.log('pickle_weth reserves', etherFromWei(respickle[0]), picoetherFromWei(respickle[1]));
+    await logEtherBalance('developer PUUL    bef dist', puulToken, developer);
+    puulToken.transfer(distributor.address, toWei('1000'));
+    await logEtherBalance('developer   PUUL    aft dist', puulToken, developer);
+    await logEtherBalance('distributor PUUL    bef farm', puulToken, distributor.address);
+    await distributor.addFarm(farm.address, { from: harvester});
 
-    outs = await helper.estimateOuts([usdt, pickle, usdt, weth], [dep, dep]);
-    logEther('out0', outs[0]);
-    logEther('out1', outs[1]);
-    tok0Min = slippage(outs[0], slpSwap);
-    tok1Min = slippage(outs[1], slpSwap);
-    logEther('tok0Min', tok0Min);
-    logEther('tok1Min', tok1Min);
+    console.log(`
+      Deposit into the CurveGusd using USDT.
+    `);
+    dep = toPicoEther('4000')
+    console.log('usdt depositing', picoetherFromWei(dep));
+
+    await logPicoetherBalance('member1 USDT balance', USDT, member1);
+    await logEtherBalance('member1 WETH balance', IERC20WETH, member1);
 
     try {
-      await instance.depositFromToken(usdt, dep, dep, tok0Min, tok1Min, slpA, slpB, slpRemA, slpRemB, {from: member1});
-      assert.equal(1, 1, 'should succeed');
+      const slip = new BN('100');
+      const min = await instance.getMinAmount(usdt, dep, slip);
+      logEther('min', min);
+      await instance.deposit(usdt, dep, min, {from: member1});
     } catch (e) {
-      console.log('depositFromToken', e);
-      assert.equal(2, 1, 'failes if it gets here');
+      console.log('deposit', e);
+      assert.equal(2, 1, 'deposit failed');
     }
     const afterDeposit = await USDT.balanceOf(member1);
     logPicoether('usdt balance after deposit', afterDeposit);
+    await logEtherBalance('share', instance, member1)
 
     console.log(`
-      Fail with too big a deposit.
-    `);
-    dep = toPicoEther('2000')
-    console.log('usdt depositing', picoetherFromWei(dep));
-    respickle = await PAIR.getReserves();
-    console.log('pickle_weth reserves', etherFromWei(respickle[0]), picoetherFromWei(respickle[1]));
-
-    outs = await helper.estimateOuts([usdt, pickle, usdt, weth], [dep, dep]);
-    logEther('out0', outs[0]);
-    logEther('out1', outs[1]);
-    tok0Min = slippage(outs[0], slpSwap);
-    tok1Min = slippage(outs[1], slpSwap);
-    logEther('tok0Min', tok0Min);
-    logEther('tok1Min', tok1Min);
-
-    try {
-      await limits.setMaxTotal(instance.address, toWei('60'));
-      await limits.setMaxDeposit(instance.address, toWei('10'));
-      await instance.depositFromToken(usdt, dep, dep, tok0Min, tok1Min, slpA, slpB, slpRemA, slpRemB, {from: member1});
-      assert.equal(2, 1, 'limit deposit should fail');
-    } catch (e) {
-      await logUSDTBalance('usdt balance member1 after fail', member1);
-      console.log('limit deposit failed', e);
-      await limits.setMaxDeposit(instance.address, toWei('0'));
-      console.log('limit reset');
-    }
-
-    console.log(`
-      Try another after failure
-    `);
-    console.log('usdt depositing', picoetherFromWei(dep));
-    respickle = await PAIR.getReserves();
-    console.log('pickle_weth reserves', etherFromWei(respickle[0]), picoetherFromWei(respickle[1]));
-
-    outs = await helper.estimateOuts([usdt, pickle, usdt, weth], [dep, dep]);
-    logEther('out0', outs[0]);
-    logEther('out1', outs[1]);
-    tok0Min = slippage(outs[0], slpSwap);
-    tok1Min = slippage(outs[1], slpSwap);
-    logEther('tok0Min', tok0Min);
-    logEther('tok1Min', tok1Min);
-
-    try {
-      await instance.depositFromToken(usdt, dep, dep, tok0Min, tok1Min, slpA, slpB, slpRemA, slpRemB, {from: member1});
-    } catch (e) {
-      await logUSDTBalance('usdt balance member1 after fail', member1);
-      console.log('second deposit failed', e);
-    }
-
-    console.log(`
-      Add a PUUL reward to the Pickle pool
-    `)
-    const FARM = await PICKLE_WETHStakingFarm.deployed();
-
-    const block = await web3.eth.getBlock('latest')
-    const t = block.timestamp + TIME_12H + TIME_1H; // current time + 12 hours + 1 hour
-    console.log('eta', t);
-    const role = web3.utils.soliditySha3('ROLE_HARVESTER')
-    const eta = new BN(t.toString()) // seconds 
-    const value = new BN('0')
-    const sig = 'grantRole(bytes32,address)'
-    const data = encodeParameters(['bytes32', 'address'], [role, developer])
-    try {
-      await timelock12.queueTransaction(FARM.address, value, sig, data, eta)
-      await timeTravel(TIME_1D)
-      await timelock12.executeTransaction(FARM.address, value, sig, data, eta)
-    } catch (e) {
-      console.log('timelock failed', e)
-      assert.isTrue(2, 1, 'timelock failed');
-    }
-
-    try {
-      let poolrew = await instance.rewards();
-      let farmrew = await FARM.rewards();
-      console.log('pool rewards before', poolrew);
-      console.log('farm rewards before', farmrew);
-      await FARM.addReward(puulToken.address);
-      await rewardFeesEndpoint.addReward(puulToken.address)
-      poolrew = await instance.rewards();
-      farmrew = await FARM.rewards();
-      console.log('pool rewards after', poolrew);
-      console.log('farm rewards after', farmrew);
-      assert.isTrue(poolrew.length === 2, 'poolrew should be 2')
-      assert.isTrue(farmrew.length === 2, 'farmrew should be 2')
-      assert.include([puulToken.address, pickle], poolrew[0], 'poolrew rewards should include pickle and puul');
-      assert.include([puulToken.address, pickle], poolrew[1], 'poolrew rewards should include pickle and puul');
-      assert.include([puulToken.address, pickle], farmrew[0], 'farmrew rewards should include pickle and puul');
-      assert.include([puulToken.address, pickle], farmrew[1], 'farmrew rewards should include pickle and puul');
-    } catch (e) {
-      console.log('add reward failed', e)
-      assert.isTrue(2, 1, 'add reward failed');
-    }
-
-    console.log(`
-      Deposit Single Sided from WETH
-    `);
-    const wdep = toWei('1')
-    console.log('weth depositing', etherFromWei(wdep));
-    await logEtherBalance('weth balance before single sided', IERC20WETH, member1)
-    respickle = await PAIR.getReserves();
-    console.log('pickle_weth reserves', etherFromWei(respickle[0]), picoetherFromWei(respickle[1]));
-
-    let out = await helper.estimateOut(weth, pickle, wdep);
-    logEther('out', out);
-    tokMin = slippage(out, slpSwap);
-    logEther('tokMin', tokMin);
-
-    try {
-      await instance.depositSingleSided(weth, wdep, wdep, tokMin, slpA, slpB, slpRemA, slpRemB, {from: member1});
-      await logEtherBalance('weth balance after single sided', IERC20WETH, member1)
-    } catch (e) {
-      console.log('second deposit failed', e);
-      assert.equal(2, 1, 'depositSingleSided failed');
-    }
-    const remPickle = await logEtherBalance('pickle balance after single sided', PICKLE, member1)
-    assert.isTrue(remPickle.isZero(), 'Pickle balance should be 0')
-
-    await logUSDTBalance('usdt balance member1 after fail', member1);
-    console.log(`
-      Should fail, total max
-    `);
-    console.log('usdt depositing', picoetherFromWei(dep));
-    respickle = await PAIR.getReserves();
-    console.log('pickle_weth reserves', etherFromWei(respickle[0]), picoetherFromWei(respickle[1]));
-
-    outs = await helper.estimateOuts([usdt, pickle, usdt, weth], [dep, dep]);
-    logEther('out0', outs[0]);
-    logEther('out1', outs[1]);
-    tok0Min = slippage(outs[0], slpSwap);
-    tok1Min = slippage(outs[1], slpSwap);
-    logEther('tok0Min', tok0Min);
-    logEther('tok1Min', tok1Min);
-
-    try {
-      await instance.depositFromToken(usdt, dep, dep, tok0Min, tok1Min, slpA, slpB, slpRemA, slpRemB, {from: member1});
-    } catch (e) {
-      await logUSDTBalance('usdt balance member1 after fail', member1);
-      console.log('second deposit failed', e);
-    }
-
-    // Restore pool limits
-    const maxDeposit = 20; // About 4000 USDC
-    const maxTotal = maxDeposit * 50; // About 200K USDC
-    await limits.setMaxDeposit(instance.address, web3.utils.toWei(maxDeposit.toString()))
-    await limits.setMaxTotal(instance.address, web3.utils.toWei(maxTotal.toString()))
-
-    console.log(`
-      Check that the pool balance equals the PICKLE/WETH pair balance.
-    `);
-    let pairbal = await PAIR.balanceOf(instance.address);
+      Check that the pool balance equals the share balance.
+   `);
+    let lpbal = await LP.balanceOf(instance.address);
     let poolbal = await instance.balanceOf(member1);
-    logEther('pickle_weth balance', pairbal);
     await logUSDTBalance('usdt balance instance', instance.address);
     await logUSDTBalance('usdt balance helper', helper.address);
     logEther('pool balance', poolbal);
-    const diffbal = poolbal.sub(pairbal);
+    const diffbal = poolbal.sub(lpbal);
     assert.equal(Number(diffbal.toString()), 0, 'pool tokens should equal lp tokens');
 
     console.log(`
-      Transfer half of the PICKLE/WETH pool tokens to member2. 
+      Withdraw part into an LP token.
+    `);
+
+    try {
+      await logEtherBalance('lp balance before withdraw', LP, member1);
+      await instance.withdrawLP(toWei('1000'), {from: member1});
+    } catch (e) {
+      console.log('withdrawLP', e);
+      assert.equal(2, 1, 'withdrawLP failed');
+    }
+    await logEtherBalance('lp balance after withdraw', LP, member1);
+
+    console.log(`
+      Deposit the LP tokens back.
+    `);
+    try {
+      const bal3 = await logEtherBalance('lp balance before deposit', LP, member1);
+      await instance.depositLP(bal3, {from: member1});
+    } catch (e) {
+      console.log('depositLP', e);
+      assert.equal(2, 1, 'depositLP failed');
+    }
+    await logEtherBalance('lp balance after deposit', LP, member1);
+
+    console.log(`
+      Withdraw part into an gusd token.
+    `);
+    try {
+      let slip = new BN('100');
+      let bal = toWei('1000');
+      let minw = await instance.estimateWithdrawUsd(gusd, bal, slip, { from: member1 });
+      logEther('minw', minw);
+      await logGUSDBalance('gusd balance member1 bef', member1);
+      await instance.withdrawUsd(gusd, bal, minw, { from: member1 });
+    } catch (e) {
+      console.log('withdrawUsd failed', e);
+    }
+    let gusdbal = await logGUSDBalance('gusd balance after withdrawal member1', member1);
+
+    console.log(`
+      Deposit the gusd tokens back.
+    `);
+    try {
+      const slip = new BN('100');
+      const min = await instance.getMinAmount(gusd, gusdbal, slip);
+      logEther('min', min);
+      await instance.deposit(gusd, gusdbal, min, {from: member1});
+    } catch (e) {
+      console.log('deposit gusd', e);
+      assert.equal(2, 1, 'deposit gusd failed');
+    }
+    await logGUSDBalance('gusd balance after deposit', member1);
+
+    console.log(`
+      Transfer half of the pool tokens to member2. 
       Amount should be one half minus the withdrawal fee.
     `);
     const xfer = poolbal.div(new BN('2'));
@@ -445,123 +366,105 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
     assert.equal(Number(diff.toString()), 0, 'xfer balance should remove fee');
 
     console.log(`
-      Farm the PICKLE/WETH farm. Mine 2000 blocks, then harvest the rewards. 
+      Farm the farm. Mine 2000 blocks, then harvest the rewards. 
     `);
     await instance.harvest();
+    await timeTravel(14*oneDay);
     for (let i = 0; i < 2000; i++) {
       await mineBlock(); 
     }
+    // Send some PUUL rewards to the farm
+    await distributor.sendRewardsToFarm(farm.address, puulToken.address, toWei('500'), { from: harvester})
+    await logEtherBalance('farm        PUUL    aft farm', puulToken, farm.address);
+    await logEtherBalance('distributor PUUL    aft farm', puulToken, distributor.address);
+
     await instance.harvest();
     console.log('rewardFeesEndpoint', rewardFeesEndpoint.address);
-    await logEtherBalance('rewardFeesEndpoint pickle', PICKLE, rewardFeesEndpoint.address);
+    await logEtherBalance('rewardFeesEndpoint crv', CRV, rewardFeesEndpoint.address);
+    await logEtherBalance('instance crv', CRV, instance.address);
+    await logEtherBalance('rewardFeesEndpoint puul', puulToken, rewardFeesEndpoint.address);
+    await logEtherBalance('instance puul', puulToken, instance.address);
 
     console.log(`
-      Convert the rewards to USDC, except for PUUL
+      Convert the rewards to USDC 
     `);
     let min = [];
     let amounts = [];
     let rewards = await instance.rewards();
     console.log('rewards', rewards);
-    let slpr = new BN('100');
+    let slpr = new BN('500');
     for (let i = 0; i < rewards.length; i++) {
       const reward = rewards[i];
-      let bal;
-      if (reward === puulToken.address) {
-        bal = new BN('0')        
-      } else {
-        const tok = await IERC20.at(reward);
-        bal = await tok.balanceOf(rewardFeesEndpoint.address);
-      }
+      const tok = await IERC20.at(reward);
+      let bal = reward == puulToken.address ? new BN('0') : (await tok.balanceOf(rewardFeesEndpoint.address));
       amounts.push(bal);
       const out = bal.isZero() ? new BN('0') : (await helper.estimateOut(reward, usdc, bal));
       min.push(slippage(out, slpr));
     }
-    console.log('min', min);
     await rewardFeesEndpoint.convertRewardFees(instance.address, helper.address, amounts, min);
     await logUSDCBalance('rewardFeesEndpoint usdc', rewardFeesEndpoint.address);
+    await logEtherBalance('rewardFeesEndpoint crv', CRV, rewardFeesEndpoint.address);
+    await logEtherBalance('rewardFeesEndpoint puul', puulToken, rewardFeesEndpoint.address);
 
     console.log(`
-      Claim the rewards from member2. The rewards are converted to usdc.
+      Claim the rewards from member2.
     `);
-    await logUSDCBalance('usdc balance member2', member2);
-    await instance.updateRewards({from: member2}); //need to interact to update rewards
-    const owed2 = await instance.owedRewards({from: member2});
-    owed2.forEach(o => logEther('owed member2', o));
-    outs = await helper.estimateOuts([pickle, usdc], [owed2[0]]);
-    logEther('out0', outs[0]);
-    outs.push(new BN('0'));
-
-    const minc2 = outs.map(out => out.sub(out.mul(slpr).div(BASE_FEE)));
-    minc2.forEach(o => logEther('min', o));
-    await instance.claimToToken(usdc, owed2, minc2, {from: member2});
-    const claim2 = await logUSDCBalance('usdc balance member2 after claimToToken', member2);
-    assert.isFalse(claim2.isZero(), 'should have gotten some usdc');
+    await instance.updateAndClaim({from: member2});
+    await logEtherBalance('crv balance member2 after claim', CRV, member2);
+    await logEtherBalance('puul balance member2 after claim', puulToken, member2);
 
     console.log(`
-      Claim the rewards from member1. The rewards are converted to usdc.
+      Claim the rewards from member1. The CRV rewards are converted to usdc.
     `);
     await logUSDCBalance('usdc balance member1', member1);
     await instance.updateRewards({from: member1}); //need to interact to update rewards
     const owed = await instance.owedRewards({from: member1});
     owed.forEach(o => logEther('owed member1', o));
-    outs = await helper.estimateOuts([pickle, usdc], [owed[0]]);
-    logEther('out0', outs[0]);
-    outs.push(new BN('0'));
 
-    const minc = outs.map(out => out.sub(out.mul(slpr).div(BASE_FEE)));
-    minc.forEach(o => logEther('min', o));
-    await instance.claimToToken(usdc, owed, minc, {from: member1});
+    min = []
+    amounts = []
+    rewards = await instance.rewards();
+    for (let i = 0; i < rewards.length; i++) {
+      const reward = rewards[i];
+      let bal = reward == puulToken.address ? new BN('0') : owed[i];
+      amounts.push(bal);
+      const out = bal.isZero() ? new BN('0') : (await helper.estimateOut(reward, usdc, bal));
+      min.push(slippage(out, slpr));
+    }
+
+    await instance.claimToToken(usdc, amounts, min, {from: member1});
     const claim = await logUSDCBalance('usdc balance member1 after claimToToken', member1);
     assert.isFalse(claim.isZero(), 'should have gotten some usdc');
+    await instance.updateAndClaim({from: member1});
+    await logEtherBalance('puul balance member1 after claim', puulToken, member1);
 
     console.log(`
-      Withdraw all the tokens from the PICKLE/WETH pool for member1. Convert to USDT.
+      Withdraw all the tokens from the pool for member1. Convert to GUSD.
     `);
-    let bal = await instance.balanceOf(member1)
-    let total = await PAIR.totalSupply();
-    let reser = await PAIR.getReserves();
-    let tok0 = getLiquidityValue(bal, reser[0], total);
-    let tok1 = getLiquidityValue(bal, reser[1], total);
-    logEther('res0', reser[0]);
-    logEther('tok0', tok0);
-    logEther('res1', reser[1]);
-    logEther('tok1', tok1);
-    let slp1 = new BN('300')
-    let liq0Min = slippage(tok0, slp1);
-    let liq1Min = slippage(tok1, slp1);
-    logEther('liq0Min', liq0Min);
-    logEther('liq1Min', liq1Min);
-    await instance.withdrawToToken(bal, dai, liq0Min, liq1Min, 300, 300, {from: member1});
-    await logDAIBalance('dai balance member1 after withdrawAllToToken', member1);
+    let slip = new BN('100');
+    let bal = await instance.balanceOf(member1);
+    let minw = await instance.estimateWithdrawUsd(gusd, bal, slip, { from: member1 });
+    logEther('minw', minw);
+    try {
+      await logGUSDBalance('gusd balance member1 bef', member1);
+      await instance.withdrawUsd(gusd, bal, minw, { from: member1 });
+      await logGUSDBalance('gusd balance member1 aft', member1);
+    } catch (e) {
+      console.log('withdrawUsd failed', e);
+    }
 
     console.log(`
-      Withdraw all the tokens from the PICKLE/WETH pool for member2. Convert to USDT.
+      Withdraw all the tokens from the pool for member2. Convert to USDC.
     `);
-    bal = await instance.balanceOf(member2)
-    logEther('member2', bal);
-    total = await PAIR.totalSupply();
-    logEther('pair', total);
-    let tbal = await instance.totalSupply()
-    logEther('totalSupply', tbal);
-    reser = await PAIR.getReserves();
-    tok0 = getLiquidityValue(bal, reser[0], total);
-    tok1 = getLiquidityValue(bal, reser[1], total);
-    logEther('res0', reser[0]);
-    logEther('tok0', tok0);
-    logEther('res1', reser[1]);
-    logEther('tok1', tok1);
-    slp1 = new BN('300')
-    liq0Min = slippage(tok0, slp1);
-    liq1Min = slippage(tok1, slp1);
-    logEther('liq0Min', liq0Min); 
-    logEther('liq1Min', liq1Min);
-    
-    await logUSDTBalance('usdt balance before withdrawAllToToken admin', member2);
-    await instance.withdrawToToken(bal, usdt, liq0Min, liq1Min, 300, 300, {from: member2});
-    await logUSDTBalance('usdt balance after withdrawAllToToken admin', member2);
+    bal = await instance.balanceOf(member2);
+    minw = await instance.estimateWithdrawUsd(usdc, bal, slip, { from: member2 });
+    logPicoether('minw', minw);
+    await logUSDCBalance('usdc balance member2 bef', member2);
+    await instance.withdrawUsd(usdc, bal, minw, { from: member2 });
+    await logUSDCBalance('usdc balance member2 aft', member2);
 
     console.log(`
-      The only thing left in the PICKLE/WETH pool should be the withdrawal fees.
+      The only thing left in the pool should be the withdrawal fees.
     `);
     const withdrawal = await puulFees.withdrawal();
     let totalSupply = await instance.totalSupply();
@@ -572,27 +475,16 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
 
     console.log(`
       The reward fees are already in the rewardFeesEndpoint, but we need to get the 
-      withdrawal fees. This gets the withdrawal fees from the pickle/weth pool, converts 
+      withdrawal fees. This gets the withdrawal fees from the curvegusd, converts 
       to USDC, and adds them to the withdrawal fees endpoint. After this, there 
-      should not be anything left in the pickle/weth pool.
+      should not be anything left in the pool.
     `);
     
     bal = await instance.balanceOf(withdrawal);
-    total = await PAIR.totalSupply();
-    reser = await PAIR.getReserves();
-    tok0 = getLiquidityValue(bal, reser[0], total);
-    tok1 = getLiquidityValue(bal, reser[1], total);
-    logEther('res0', reser[0]);
-    logEther('tok0', tok0);
-    logEther('res1', reser[1]);
-    logEther('tok1', tok1);
-    slp1 = new BN('300')
-    liq0Min = slippage(tok0, slp1);
-    liq1Min = slippage(tok1, slp1);
-    logEther('liq0Min', liq0Min);
-    logEther('liq1Min', liq1Min);
+    minw = await instance.estimateWithdrawUsdWithoutFees(usdt, bal, slip);
+    logPicoether('minw', minw);
 
-    await withdrawalFeesEndpoint.withdrawFees(instance.address, bal, liq0Min, liq1Min, slp1, slp1);
+    await withdrawalFeesEndpoint.withdrawFees(instance.address, bal, minw, 0, 0, 0);
     await logUSDCBalance('withdrawalFeesEndpoint usdc', withdrawalFeesEndpoint.address);
     await logUSDCBalance('rewardFeesEndpoint usdc', rewardFeesEndpoint.address);
     totalSupply = await instance.totalSupply();
@@ -601,8 +493,8 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
     logEther('withdraw withdrawal fees', withdrawFees);
     assert.equal(Number(totalSupply.toString()), 0, 'totalSupply should equal 0');
     assert.equal(0, Number(withdrawFees.toString()), 'withdrawal fees should be 0');
-    pairbal = await PAIR.balanceOf(instance.address);
-    assert.equal(0, Number(pairbal.toString()), 'should be no pair tokens');
+    lpbal = await LP.balanceOf(instance.address);
+    assert.equal(0, Number(lpbal.toString()), 'should be no lp tokens');
 
     console.log(`
       At this point all the fees are in the endpoint/farms, except the reward fees due
@@ -611,21 +503,16 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
     `);
 
     await withdrawalFeesEndpoint.updateAndClaim(instance.address);
-    logEtherBalance('withdrawFeesEndpoint pickle', PICKLE, withdrawalFeesEndpoint.address);
+    logEtherBalance('withdrawFeesEndpoint crv', CRV, withdrawalFeesEndpoint.address);
     min = [];
     amounts = [];
     rewards = await instance.rewards();
     console.log('rewards', rewards);
-    slpr = new BN('100');
+    slpr = new BN('500');
     for (let i = 0; i < rewards.length; i++) {
       const reward = rewards[i];
-      let bal;
-      if (reward === puulToken.address) {
-        bal = new BN('0')        
-      } else {
-        const tok = await IERC20.at(reward);
-        bal = await tok.balanceOf(rewardFeesEndpoint.address);
-      }
+      const tok = await IERC20.at(reward);
+      const bal = reward === puulToken.address ? new BN('0') : (await tok.balanceOf(withdrawalFeesEndpoint.address));
       amounts.push(bal);
       const out = bal.isZero() ? new BN('0') : (await helper.estimateOut(reward, usdc, bal));
       min.push(slippage(out, slpr));
@@ -634,6 +521,8 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
     await logUSDCBalance('withdrawalFeesEndpoint usdc before convert withdrawal reward fees', withdrawalFeesEndpoint.address);
     await withdrawalFeesEndpoint.convertRewardFees(instance.address, helper.address, amounts, min);
     await logUSDCBalance('withdrawalFeesEndpoint usdc before convert withdrawal reward fees', withdrawalFeesEndpoint.address);
+    await logEtherBalance('withdrawalFeesEndpoint crv', CRV, withdrawalFeesEndpoint.address);
+    await logEtherBalance('withdrawalFeesEndpoint puul', puulToken, withdrawalFeesEndpoint.address);
 
     console.log(`
       At this point all the fees are in the endpoint/farms. We can harvest them 
@@ -644,12 +533,14 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
     await logUSDCBalance('rewardFeesEndpoint usdc after harvest', rewardFeesEndpoint.address);
     await logUSDCBalance('rewardFeesToken usdc after harvest', rewardFeesToken.address);
 
+    await logEtherBalance('puul reward dev balance before claim', puulToken, developer);
     await logUSDCBalance('usdc reward dev balance before claim', developer);
     await rewardFeesToken.updateRewards({from: developer});
     let owedre = await rewardFeesToken.owedRewards({from: developer});
     owedre.forEach(o => logEther('owed', o));
     await rewardFeesToken.updateAndClaim({from: developer});
     await logUSDCBalance('usdc reward dev balance after claim', developer);
+    await logEtherBalance('puul reward dev balance after claim', puulToken, developer);
 
     await logUSDCBalance('withdrawalFeesEndpoint usdc before harvest into token', withdrawalFeesEndpoint.address);
     await withdrawalFeesToken.harvest();    
@@ -657,15 +548,16 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
     await logUSDCBalance('withdrawFeesToken usdc after harvest', withdrawalFeesToken.address);
 
     await logUSDCBalance('usdc withdrawal dev balance before claim', developer);
+    await logEtherBalance('puul reward dev balance before claim', puulToken, developer);
     await withdrawalFeesToken.updateAndClaim({from: developer});
     await logUSDCBalance('usdc withdrawal dev balance after claim', developer);
+    await logEtherBalance('puul reward dev balance after claim', puulToken, developer);
 
     console.log(`
       The fees are now in the fee tokens. Some of those tokens are owned by 
       the staking pool endpoint/farm. We need to claim those into the 
       staking token endpoint. Everything is already converted to USDC.
     `);
-    await logEtherBalance('puul token balance before', puulToken, developer);
 
     const stakingToken = await PuulStakingPool.deployed();
     const stakingTokenEndpoint = await PuulStakingPoolEndpoint.deployed();
@@ -695,9 +587,11 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
     await stakingToken.harvest();
     await logEtherBalance('withdrawalFeesEndpoint PUUL after harvest', puulToken, withdrawalFeesEndpoint.address);
     await logEtherBalance('stakingToken           PUUL after harvest', puulToken, stakingToken.address);
-    const before = await logUSDCBalance('stakingToken usdc before updateAndClaim rewards', developer);
+    const before = await logUSDCBalance('developer usdc before updateAndClaim rewards', developer);
+    await logEtherBalance('developer PUUL before harvest', puulToken, developer);
     await stakingToken.updateAndClaim({from: developer});
-    const after = await logUSDCBalance('stakingToken usdc after updateAndClaim rewards', developer);
+    const after = await logUSDCBalance('developer usdc after updateAndClaim rewards', developer);
+    await logEtherBalance('developer PUUL after harvest', puulToken, developer);
     const extra = await logUSDCBalance('stakingToken usdc after updateAndClaim rewards', stakingToken.address);
     total = after.sub(before).add(extra).sub(allusdc);
     assert.equal(Number(total.toString()), 0, 'all reward usdc should be accounted for');
@@ -749,10 +643,15 @@ contract("PICKLE_WETHStakingFarm", async accounts => {
     await logEtherBalance('puul token balance before updateAndClaim', puulToken, developer);
     await stakingToken.updateAndClaim();
     await logEtherBalance('puul token balance after after updateAndClaim', puulToken, developer);
+
     console.log(`
       Withdraw from the staking pool and get the rest of the PUUL tokens.
     `);
-    await logEtherBalance('staking token balance before withdraw', stakingToken, developer);
+    await logEtherBalance('developer              PUULSTK before withdraw', stakingToken, developer);
+    await logEtherBalance('stakingToken           PUUL    before withdraw', puulToken, stakingToken.address);
+    await stakingToken.withdrawAll();
+    await logEtherBalance('developer              PUUL    after  withdraw', puulToken, developer);
+    await logEtherBalance('developer              PUULSTK after  withdraw', stakingToken, developer);
 
   });
 });

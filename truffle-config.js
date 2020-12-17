@@ -35,7 +35,7 @@ module.exports = {
     mainnet: {
       provider: () => new HDWalletProvider(process.env.MAINNET_MNEMONIC, "http://127.0.0.1:8545"),
       network_id: 1,       
-      gasPrice: 20000000000, // gwei
+      gasPrice: 40000000000, // gwei
       gas: 6000000,
     }
   },

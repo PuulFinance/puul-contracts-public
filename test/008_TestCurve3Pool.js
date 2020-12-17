@@ -188,6 +188,7 @@ contract("Curve3Pool", async accounts => {
     LP = await IERC20.at(lp);
     CRV = await IERC20.at(crv);
     UNI_FACTORY = await IUniswapV2Factory.at(factory);
+    await approve(LP, instance.address, member1);
     await approve(IERC20WETH, instance.address, member1);
     await approve(IERC20WETH, instance.address, admin);
     UNI_ROUTER = await IUniswapV2Router02.at('0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D');
@@ -251,7 +252,7 @@ contract("Curve3Pool", async accounts => {
     console.log(`
       Deposit into the Curve3Pool using USDT.
     `);
-    dep = toPicoEther('2000')
+    dep = toPicoEther('4000')
     console.log('usdt depositing', picoetherFromWei(dep));
 
     await logPicoetherBalance('member1 USDT balance', USDT, member1);
@@ -280,6 +281,31 @@ contract("Curve3Pool", async accounts => {
     logEther('pool balance', poolbal);
     const diffbal = poolbal.sub(lpbal);
     assert.equal(Number(diffbal.toString()), 0, 'pool tokens should equal lp tokens');
+
+    console.log(`
+      Withdraw part into an LP token.
+    `);
+
+    try {
+      await logEtherBalance('3pool balance before withdraw', LP, member1);
+      await instance.withdrawLP(toWei('1000'), {from: member1});
+    } catch (e) {
+      console.log('withdrawLP', e);
+      assert.equal(2, 1, 'withdrawLP failed');
+    }
+    await logEtherBalance('3pool balance after withdraw', LP, member1);
+
+    console.log(`
+      Deposit the LP tokens back.
+    `);
+    try {
+      const bal3 = await logEtherBalance('3pool balance before deposit', LP, member1);
+      await instance.depositLP(bal3, {from: member1});
+    } catch (e) {
+      console.log('depositLP', e);
+      assert.equal(2, 1, 'depositLP failed');
+    }
+    await logEtherBalance('3pool balance after deposit', LP, member1);
 
     console.log(`
       Transfer half of the pool tokens to member2. 
@@ -378,7 +404,7 @@ contract("Curve3Pool", async accounts => {
     logEther('minw', minw);
     logEtherBalance('lp bef', LP, instance.address);
     await logEtherBalance('dai balance member1 bef', DAI, member1);
-    await instance.withdrawAllUsd(dai, minw, { from: member1 });
+    await instance.withdrawUsd(dai, bal, minw, { from: member1 });
     await logEtherBalance('dai balance member1 aft', DAI, member1);
 
     console.log(`
@@ -388,7 +414,7 @@ contract("Curve3Pool", async accounts => {
     minw = await instance.estimateWithdrawUsd(usdt, bal, slip, { from: member2 });
     logPicoether('minw', minw);
     await logUSDTBalance('usdt balance member2 bef', member2);
-    await instance.withdrawAllUsd(usdt, minw, { from: member2 });
+    await instance.withdrawUsd(usdt, bal, minw, { from: member2 });
     await logUSDTBalance('usdt balance member2 aft', member2);
 
     console.log(`
@@ -431,7 +457,7 @@ contract("Curve3Pool", async accounts => {
     `);
 
     await withdrawalFeesEndpoint.updateAndClaim(instance.address);
-    logEtherBalance('withdrawFeesEndpoint mph', CRV, withdrawalFeesEndpoint.address);
+    logEtherBalance('withdrawFeesEndpoint crv', CRV, withdrawalFeesEndpoint.address);
     min = [];
     amounts = [];
     rewards = await instance.rewards();
