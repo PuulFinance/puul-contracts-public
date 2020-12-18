@@ -19,8 +19,8 @@ module.exports = async function (deployer, network, accounts) {
     const puulFees = await PuulFees.deployed();
     const tl12hours = await Timelock12Hours.deployed();
     const limits = await Limits.deployed();
-    // const puulToken = await PuulToken.at('0x897581168bB658954a811a03de8394EBd42852Ef');
-    const puulToken = await PuulToken.deployed();
+    const puulToken = await PuulToken.at('0x897581168bB658954a811a03de8394EBd42852Ef');
+    // const puulToken = await PuulToken.deployed();
 
     const deployPool = CurveGusd;
     const deployFarm = CurveGusdFarm;
