@@ -6,8 +6,8 @@ const IUniswapV2Router02 = artifacts.require("IUniswapV2Router02");
 const IUniswapV2Factory = artifacts.require("IUniswapV2Factory");
 const PuulFees = artifacts.require("PuulFees");
 const PuulRewardFees = artifacts.require("PuulRewardFees");
-const PUUL_USDCPool = artifacts.require("PUUL_USDCPool");
-const PUUL_USDCFarm = artifacts.require("PUUL_USDCFarm");
+const USDC_PUULPool = artifacts.require("USDC_PUULPool");
+const USDC_PUULFarm = artifacts.require("USDC_PUULFarm");
 const PuulRewardFeesEndpoint = artifacts.require("PuulRewardFeesEndpoint");
 const PuulRewardsFeeToken = artifacts.require("PuulRewardsFeeToken");
 const PuulWithdrawalFeesEndpoint = artifacts.require("PuulWithdrawalFeesEndpoint");
@@ -20,7 +20,7 @@ const RewardDistributor = artifacts.require("RewardDistributor");
 
 const BN = require('bn.js');
 
-contract("PUUL_USDCFarm", async accounts => {
+contract("USDC_PUULFarm", async accounts => {
   let instance;
   let helper;
   let farm;
@@ -29,7 +29,6 @@ contract("PUUL_USDCFarm", async accounts => {
   let usdc = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
   let dai = '0x6B175474E89094C44Da98b954EedeAC495271d0F';
   let usdt = '0xdAC17F958D2ee523a2206206994597C13D831ec7';
-  let token = '0x0391D2021f89DC339F60Fff84546EA23E337750f'; // BOND
   const BASE_FEE = new BN('10000');
 
 
@@ -189,9 +188,9 @@ contract("PUUL_USDCFarm", async accounts => {
     rewardFees = await PuulRewardFees.deployed();
     puulFees = await PuulFees.deployed();
     withdrawFee = await rewardFees.getWithdrawalFee();  
-    instance = await PUUL_USDCPool.deployed();
+    instance = await USDC_PUULPool.deployed();
     limits = await Limits.deployed();
-    farm = await PUUL_USDCFarm.deployed();
+    farm = await USDC_PUULFarm.deployed();
 
     WETH = await IWETH.at(weth);
     IERC20WETH = await IERC20.at(weth);
@@ -311,6 +310,11 @@ contract("PUUL_USDCFarm", async accounts => {
     await logEtherBalance('share', instance, developer)
     await logEtherBalance('PUUL after deposit', puulToken, developer)
 
+    // make sure these are all a noop
+    await instance.earn();
+    await instance.harvest();
+    await instance.liquidate();
+    
     console.log(`
       Check that the pool balance equals the PUUL/USDC pair balance.
    `);
